@@ -4,7 +4,7 @@ import { fmt, fmtRate } from './model.js'
 import { equilibria } from './sim.js'
 
 const M = { top: 26, right: 22, bottom: 46, left: 58 }
-const HEIGHT = 260
+const HEIGHT = 300
 const X_SPAN = 1.3
 const SAMPLES = 160
 

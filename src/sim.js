@@ -1,9 +1,10 @@
 import { EVENT_KINDS } from './model.js'
 
 export const RUNS = 8
-const STEPS_CONTINUOUS = 16000
 const EXTINCT_BELOW = 0.5
-const BOOM_FACTOR = 3
+const DIEOFF_SHARE = 0.5
+
+const continuousSteps = (tMax) => Math.min(40000, Math.max(16000, Math.round(tMax * 60)))
 
 export function mulberry32(seed) {
   return () => {
@@ -51,16 +52,18 @@ export const regimeFor = (regimes, x) => regimes.find((b) => x < b.to) ?? regime
 export const predatorPressure = (K, r) => ({ maxKill: 0.22 * r * K, halfSaturation: 0.1 * K })
 
 export function growthModel(p, events) {
-  const booms = events.filter((e) => e.kind === 'boom')
+  const overrides = events.filter((e) => EVENT_KINDS[e.kind].perCapita)
+  const overrideAt = (t) => overrides.findLast((e) => t >= e.t && t < e.t + e.amount)
   const predatorsFrom = Math.min(...events.filter((e) => e.kind === 'predators').map((e) => e.t))
   const A = p.allee.on ? p.allee.A : 0
   const harvest = p.harvest.on ? p.harvest.effort * p.r : 0
   const { maxKill, halfSaturation } = predatorPressure(p.K, p.r)
 
-  const rAt = (t) => (booms.some((e) => t >= e.t && t < e.t + e.amount) ? p.r * BOOM_FACTOR : p.r)
+  const rAt = () => p.r
 
   const perCapita = (n, nLag, k, t) => {
-    let g = rAt(t) * (1 - nLag / k)
+    const override = overrideAt(t)
+    let g = override ? EVENT_KINDS[override.kind].perCapita(rAt(t)) : rAt(t) * (1 - nLag / k)
     if (A > 0) {
       const allee = (n - A) / (n + A)
       g = g >= 0 ? g * allee : g * Math.abs(allee)
@@ -88,9 +91,10 @@ function eventsByStep(events, dt, steps) {
   return map
 }
 
-function capacityTimeline(p, byStep, dt, steps) {
+function capacityTimeline(p, events, byStep, dt, steps) {
   const K = new Float64Array(steps + 1)
   const base = new Float64Array(steps + 1)
+  const shaped = events.filter((e) => EVENT_KINDS[e.kind].kShape)
   const season = p.season.on ? p.season : null
   const spacing = season ? season.period / 2 : 1
   const rand = mulberry32(p.seed * 7919 + 13)
@@ -105,9 +109,13 @@ function capacityTimeline(p, byStep, dt, steps) {
       const kind = EVENT_KINDS[e.kind]
       if (kind.k) k = kind.k(k, e.amount, p.K)
     }
+    const t = i * dt
     let factor = 1
+    let shape = 1
+    for (const e of shaped) {
+      if (t >= e.t && t < e.t + e.amount) shape *= EVENT_KINDS[e.kind].kShape((t - e.t) / e.amount)
+    }
     if (season) {
-      const t = i * dt
       factor += season.amp * Math.sin((2 * Math.PI * t) / season.period)
       if (knots) {
         const x = t / spacing
@@ -117,19 +125,19 @@ function capacityTimeline(p, byStep, dt, steps) {
       }
     }
     base[i] = k
-    K[i] = k * Math.max(0.05, factor)
+    K[i] = k * shape * Math.max(0.05, factor)
   }
   return { K, base }
 }
 
 export function simulate(p, events) {
   const discrete = p.discrete.on
-  const dt = discrete ? 1 : p.tMax / STEPS_CONTINUOUS
+  const dt = discrete ? 1 : p.tMax / continuousSteps(p.tMax)
   const steps = Math.round(p.tMax / dt)
   const visible = events.filter((e) => e.t <= p.tMax)
   const model = growthModel(p, visible)
   const byStep = eventsByStep(visible, dt, steps)
-  const { K, base } = capacityTimeline(p, byStep, dt, steps)
+  const { K, base } = capacityTimeline(p, visible, byStep, dt, steps)
   const lagSteps = p.lag.on ? Math.round(p.lag.tau / dt) : 0
   const turnover = p.chance.on ? p.chance.level * (discrete ? 2 : 5 * p.r) * dt : 0
   const log = []
@@ -142,6 +150,7 @@ export function simulate(p, events) {
         const kind = EVENT_KINDS[e.kind]
         const before = n
         if (kind.n) n = kind.n(n, K[i], e.amount)
+        if (kind.rewind) n = i > 0 ? N[Math.max(0, i - Math.round(e.amount / dt))] : n
         if (rand) n = Math.round(n)
         if (n < EXTINCT_BELOW) n = 0
         if (record) log.push({ ...e, before, after: n, kBefore: K[Math.max(0, i - 1)], kAfter: K[i] })
@@ -170,7 +179,12 @@ export function simulate(p, events) {
     ? Array.from({ length: RUNS }, (_, j) => run(mulberry32(p.seed * 104729 + j * 7 + 1), j === 0))
     : [det]
 
-  return { dt, steps, discrete, lagSteps, K, baseK: base, runs, det, log, model, eventSteps: [...byStep.keys()] }
+  return {
+    dt, steps, discrete, lagSteps, K, baseK: base, runs, det, log, model,
+    eventSteps: [...byStep.keys()],
+    extinctions: runs.map((N) => extinctionTime(N, dt)),
+    crashes: dieOffs(runs[0], dt),
+  }
 }
 
 export function valueAt(arr, x) {
@@ -233,12 +247,7 @@ export function figures(sim, p) {
   }
   const mean = sum / (steps - tailStart + 1)
 
-  let extinctT = null
-  if (N[steps] === 0) {
-    let i = steps
-    while (i > 0 && N[i - 1] === 0) i--
-    extinctT = i * dt
-  }
+  const extinctT = extinctionTime(N, dt)
 
   let outcome
   if (extinctT !== null) outcome = { kind: 'extinct', t: extinctT }
@@ -255,10 +264,48 @@ export function figures(sim, p) {
     outcome,
     doublingT: Math.LN2 / p.r,
     recoveryT: 1 / p.r,
-    expAtEnd: p.N0 * Math.exp(p.r * p.tMax),
+    expLog10: Math.log10(p.N0) + (p.r * p.tMax) / Math.LN10,
     extinctRuns: sim.runs.filter((R) => R[steps] === 0).length,
     runCount: sim.runs.length,
   }
+}
+
+export function extinctionTime(N, dt) {
+  const last = N.length - 1
+  if (N[last] !== 0) return null
+  let i = last
+  while (i > 0 && N[i - 1] === 0) i--
+  return i * dt
+}
+
+export function dieOffs(N, dt) {
+  const found = []
+  const patience = Math.max(1, Math.round(N.length / 50))
+  let peak = N[0]
+  let dropping = false
+  let low = Infinity
+  let lowI = 0
+  const close = () => found.push({ t: lowI * dt, from: peak, to: low })
+  for (let i = 0; i < N.length; i++) {
+    const v = N[i]
+    if (!dropping) {
+      if (v > peak) peak = v
+      else if (v < peak * DIEOFF_SHARE) {
+        dropping = true
+        low = v
+        lowI = i
+      }
+    } else if (v < low * 0.995) {
+      low = v
+      lowI = i
+    } else if (v > low * 1.3 + 1 || i - lowI > patience) {
+      close()
+      dropping = false
+      peak = v
+    }
+  }
+  if (dropping) close()
+  return found.filter((d) => d.to > 0)
 }
 
 export function equilibria(change, xMax, discrete, lagTau) {

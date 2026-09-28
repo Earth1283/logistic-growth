@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { figures as computeFigures, simulate, stateAt } from './sim.js'
-import { DEFAULT_PARAMS, PRESETS, paramsFor } from './presets.js'
+import { EVENT_KINDS } from './model.js'
+import { DEFAULT_PARAMS, PRESETS, paramsFor, randomWorld } from './presets.js'
 import { downloadCSV } from './exportCsv.js'
 import Equation from './Equation.jsx'
 import Controls from './Controls.jsx'
+import ChartToolbar from './ChartToolbar.jsx'
 import SCurveChart from './SCurveChart.jsx'
 import PlatePanel from './PlatePanel.jsx'
 import { GrowthRateChart, PerCapitaChart } from './RateCharts.jsx'
 import Analysis from './Analysis.jsx'
+import ThemeSwitch from './ThemeSwitch.jsx'
+import WelcomeModal, { hasSeenWelcome } from './WelcomeModal.jsx'
 import { Term } from './Tip.jsx'
 
 const PLAY_SECONDS = 10
@@ -18,15 +22,18 @@ const reducedMotion = () =>
 export default function App() {
   const [p, setP] = useState(DEFAULT_PARAMS)
   const [presetId, setPresetId] = useState('classic')
+  const [sceneKey, setSceneKey] = useState('classic')
   const [showExp, setShowExp] = useState(true)
   const [events, setEvents] = useState([])
   const [amounts, setAmounts] = useState({ harvest: 0.6, migrants: 300, shrink: 0.4 })
   const [speed, setSpeed] = useState(1)
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !hasSeenWelcome())
   const [tNow, setTNow] = useState(() => (reducedMotion() ? DEFAULT_PARAMS.tMax : 0))
-  const [playing, setPlaying] = useState(() => !reducedMotion())
+  const [playing, setPlaying] = useState(() => !reducedMotion() && hasSeenWelcome())
   const nextId = useRef(1)
 
   const t = Math.min(tNow, p.tMax)
+  const atEnd = t >= p.tMax
   const sim = useMemo(() => simulate(p, events), [p, events])
   const figures = useMemo(() => computeFigures(sim, p), [sim, p])
   const now = stateAt(sim, p, t)
@@ -50,12 +57,12 @@ export default function App() {
   }, [playing, p.tMax, speed])
 
   useEffect(() => {
-    if (playing && t >= p.tMax) setPlaying(false)
-  }, [playing, t, p.tMax])
+    if (playing && atEnd) setPlaying(false)
+  }, [playing, atEnd])
 
   const togglePlay = () => {
     if (playing) return setPlaying(false)
-    if (t >= p.tMax) setTNow(0)
+    if (atEnd) setTNow(0)
     setPlaying(true)
   }
 
@@ -69,9 +76,9 @@ export default function App() {
     setTNow(value)
   }
 
-  const applyPreset = (next) => {
-    const params = paramsFor(next)
-    setPresetId(next.id)
+  const loadWorld = (params, id) => {
+    setPresetId(id)
+    setSceneKey(`${id}-${params.seed}`)
     setP(params)
     setEvents([])
     if (reducedMotion()) {
@@ -80,8 +87,14 @@ export default function App() {
     } else restart()
   }
 
+  const closeWelcome = () => {
+    setWelcomeOpen(false)
+    if (!reducedMotion() && tNow === 0) setPlaying(true)
+  }
+
   const addEvent = (kind) => {
-    const amount = kind === 'boom' ? p.tMax / 10 : amounts[kind]
+    const duration = EVENT_KINDS[kind].duration
+    const amount = duration ? duration(p.tMax, p.r) : amounts[kind]
     setEvents((list) => [...list, { id: nextId.current++, t, kind, amount }])
   }
 
@@ -97,87 +110,105 @@ export default function App() {
             nature.
           </p>
         </div>
-        <Equation p={p} events={events} />
+        <div className="masthead-side">
+          <ThemeSwitch />
+          <Equation p={p} events={events} />
+        </div>
       </header>
 
-      <main className="lab">
-        <section className="panel chart-panel" aria-label="Population over time">
-          <SCurveChart
-            sim={sim}
-            p={p}
-            figures={figures}
-            tNow={t}
-            showExp={showExp}
-            data={preset?.data}
-            sceneKey={presetId}
-            onScrub={scrub}
-          />
-        </section>
-
+      <div className="workspace">
         <Controls
           p={p}
           setParam={setParam}
           setFeature={setFeature}
           presetId={presetId}
-          onPreset={applyPreset}
-          playback={{ playing, day: t, speed, setSpeed, onTogglePlay: togglePlay, onRestart: restart }}
+          onPreset={(x) => loadWorld(paramsFor(x), x.id)}
+          onRandomWorld={() => loadWorld(randomWorld(), 'random')}
           amounts={amounts}
           setAmount={(kind, v) => setAmounts((a) => ({ ...a, [kind]: v }))}
           events={events}
           now={now}
+          atEnd={atEnd}
           onAddEvent={addEvent}
           onRemoveEvent={(id) => setEvents((list) => list.filter((e) => e.id !== id))}
           onClearEvents={() => setEvents([])}
           showExp={showExp}
           setShowExp={setShowExp}
-          onExport={() => downloadCSV(sim, p)}
         />
 
-        <PlatePanel n={now.n} k={now.k} rate={now.rate} day={t} unit={p.unit} />
-      </main>
+        <main className="main">
+          <section className="panel chart-panel" aria-label="Population over time">
+            <ChartToolbar
+              playing={playing}
+              atEnd={atEnd}
+              day={t}
+              unit={p.unit}
+              speed={speed}
+              setSpeed={setSpeed}
+              onTogglePlay={togglePlay}
+              onRestart={restart}
+              onExport={() => downloadCSV(sim, p)}
+            />
+            <SCurveChart
+              sim={sim}
+              p={p}
+              figures={figures}
+              tNow={t}
+              showExp={showExp}
+              data={preset?.data}
+              sceneKey={sceneKey}
+              onScrub={scrub}
+            />
+          </section>
 
-      <section className="analysis" aria-labelledby="analysis-title">
-        <h2 id="analysis-title">
-          Why the population stops at <i className="v-k">K</i>
-        </h2>
-        <div className="analysis-grid">
-          <figure className="panel figure">
-            <figcaption>
-              <h3>Growth rate against population size</h3>
-              <p>
-                Where the curve crosses zero, births and deaths balance: an{' '}
-                <Term id="equilibrium">equilibrium</Term>. Arrows show which way the population moves
-                from any size. Switch on the Allee effect, harvest or predators to see the crossings
-                shift.
-              </p>
-            </figcaption>
-            <GrowthRateChart sim={sim} k={now.k} n={now.n} t={t} lagTau={p.lag.on ? p.lag.tau : 0} unit={p.unit} />
-          </figure>
-          <figure className="panel figure">
-            <figcaption>
-              <h3>Growth per individual</h3>
-              <p>
-                Each individual contributes less as crowding increases. The shaded gap is the growth
-                lost to <Term id="resistance">environmental resistance</Term>.
-              </p>
-            </figcaption>
-            <PerCapitaChart sim={sim} k={now.k} n={now.n} t={t} unit={p.unit} />
-          </figure>
-          <Analysis p={p} figures={figures} now={now} />
-        </div>
-      </section>
+          <PlatePanel n={now.n} k={now.k} rate={now.rate} day={t} unit={p.unit} />
 
-      <footer className="footnote">
-        <p>
-          The classic model assumes a closed population, overlapping generations, no time lags and a
-          fixed carrying capacity. Each realism switch removes one of those assumptions. Parameters in
-          the scenarios are illustrative unless a source is given.
-        </p>
-        <p className="aside">
-          The assignment said to “build, test, and debug the HTML webpage.” The HTML file is 17 lines
-          long. Everything else is React. We may have overdone it.
-        </p>
-      </footer>
+          <section className="analysis" aria-labelledby="analysis-title">
+            <h2 id="analysis-title">
+              Why the population stops at <i className="v-k">K</i>
+            </h2>
+            <figure className="panel figure">
+              <figcaption>
+                <h3>Growth rate against population size</h3>
+                <p>
+                  Where the curve crosses zero, births and deaths balance: an{' '}
+                  <Term id="equilibrium">equilibrium</Term>. Arrows show which way the population
+                  moves from any size. Switch on the Allee effect, harvest or predators to see the
+                  crossings shift.
+                </p>
+              </figcaption>
+              <GrowthRateChart sim={sim} k={now.k} n={now.n} t={t} lagTau={p.lag.on ? p.lag.tau : 0} unit={p.unit} />
+            </figure>
+            <figure className="panel figure">
+              <figcaption>
+                <h3>Growth per individual</h3>
+                <p>
+                  Each individual contributes less as crowding increases. The shaded gap is the growth
+                  lost to <Term id="resistance">environmental resistance</Term>.
+                </p>
+              </figcaption>
+              <PerCapitaChart sim={sim} k={now.k} n={now.n} t={t} unit={p.unit} />
+            </figure>
+            <Analysis p={p} figures={figures} now={now} />
+          </section>
+
+          <footer className="footnote">
+            <p>
+              The classic model assumes a closed population, overlapping generations, no time lags and
+              a fixed carrying capacity. Each realism switch removes one of those assumptions.
+              Parameters in the scenarios are illustrative unless a source is given.
+            </p>
+            <p className="aside">
+              The assignment said to “build, test, and debug the HTML webpage.” The HTML file is 17
+              lines long. Everything else is React. We may have overdone it.{' '}
+              <button type="button" className="btn-link" onClick={() => setWelcomeOpen(true)}>
+                About this project
+              </button>
+            </p>
+          </footer>
+        </main>
+      </div>
+      <WelcomeModal open={welcomeOpen} onClose={closeWelcome} />
     </div>
   )
 }

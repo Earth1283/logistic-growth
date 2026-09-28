@@ -86,6 +86,34 @@ export const PRESETS = [
   },
 ]
 
+export function randomWorld(rand = Math.random) {
+  const between = (lo, hi) => lo + rand() * (hi - lo)
+  const coin = (odds) => rand() < odds
+  const discrete = coin(0.25)
+  const r = Number(between(0.15, discrete ? 2.95 : 1.4).toFixed(2))
+  const K = Math.round(between(150, 1000) / 10) * 10
+  return {
+    ...DEFAULT_PARAMS,
+    K,
+    r,
+    N0: Math.round(between(2, 80)),
+    tMax: [50, 100, 200, 500][Math.floor(rand() * 4)],
+    unit: ['hour', 'day', 'week', 'year'][Math.floor(rand() * 4)],
+    seed: Math.floor(rand() * 1e6),
+    discrete: { on: discrete },
+    lag: { on: !discrete && coin(0.4), tau: Number(between(0.3, 2.4 / r).toFixed(1)) },
+    chance: { on: coin(0.4), level: Number(between(0.2, 1).toFixed(2)) },
+    allee: { on: coin(0.3), A: Math.round(between(5, 60)) },
+    season: {
+      on: coin(0.35),
+      amp: Number(between(0.1, 0.7).toFixed(2)),
+      period: Math.round(between(8, 60)),
+      noise: Number(between(0, 0.4).toFixed(2)),
+    },
+    harvest: { on: coin(0.25), effort: Number(between(0.1, 0.9).toFixed(2)) },
+  }
+}
+
 export function paramsFor(preset) {
   const merged = { ...DEFAULT_PARAMS }
   for (const [key, value] of Object.entries(preset.params)) {

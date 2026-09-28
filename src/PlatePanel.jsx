@@ -50,7 +50,7 @@ function Plate({ n, k }) {
 
       const whole = Math.min(MAX_DOTS, Math.floor(n))
       const partial = n - Math.floor(n)
-      ctx.fillStyle = token('--violet')
+      ctx.fillStyle = token('--accent')
       const dotR = unit * 0.62
       for (let i = 0; i <= whole && i < MAX_DOTS; i++) {
         if (i === whole) {
@@ -102,30 +102,32 @@ export default function PlatePanel({ n, k, rate, day, unit }) {
   const u = UNITS[unit]
   return (
     <section className="panel plate-panel" aria-label="Habitat view">
-      <h2>Habitat, {u.one} {fmt(day, 1)}</h2>
       <Plate n={n} k={k} />
-      <p className="plate-caption">
-        Each dot is one individual. The dashed ring encloses the space the habitat can support, its{' '}
-        <Term id="carryingCapacity">carrying capacity</Term>.
-      </p>
-      <dl className="readouts">
-        <div>
-          <dt>Population <i className="v-n">N</i></dt>
-          <dd className="big">{fmt(n)}</dd>
+      <div className="plate-side">
+        <h2>Habitat, {u.one} {fmt(day, 1)}</h2>
+        <p className="plate-caption">
+          Each dot is one individual. The dashed ring encloses the space the habitat can support, its{' '}
+          <Term id="carryingCapacity">carrying capacity</Term>.
+        </p>
+        <dl className="readouts">
+          <div>
+            <dt>Population <i className="v-n">N</i></dt>
+            <dd className="big">{fmt(n)}</dd>
+          </div>
+          <div>
+            <dt>Share of <i className="v-k">K</i></dt>
+            <dd className="big">{fmt(share * 100)}%</dd>
+          </div>
+          <div>
+            <dt>Change per {u.one}</dt>
+            <dd className="big">{fmtRate(rate)}</dd>
+          </div>
+        </dl>
+        <div className="fill-meter" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, share * 100)}%` }} />
         </div>
-        <div>
-          <dt>Share of <i className="v-k">K</i></dt>
-          <dd className="big">{fmt(share * 100)}%</dd>
-        </div>
-        <div>
-          <dt>Change per {u.one}</dt>
-          <dd className="big">{fmtRate(rate)}</dd>
-        </div>
-      </dl>
-      <div className="fill-meter" aria-hidden="true">
-        <span style={{ width: `${Math.min(100, share * 100)}%` }} />
+        <p className="phase">{growthPhase(n, k, rate)}</p>
       </div>
-      <p className="phase">{growthPhase(n, k, rate)}</p>
     </section>
   )
 }

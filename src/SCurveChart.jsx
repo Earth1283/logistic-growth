@@ -1,12 +1,13 @@
 import { useMemo, useRef, useState } from 'react'
 import { useSize } from './useWidth.js'
-import { EVENT_KINDS, UNITS, cap, fmt, fmtRate, growthPhase } from './model.js'
+import { EVENT_KINDS, UNITS, cap, fmt, fmtHuge, fmtRate, growthPhase } from './model.js'
 import { stateAt, stepAt, valueAt } from './sim.js'
 
 const M = { top: 34, right: 76, bottom: 46, left: 58 }
 const TARGET_POINTS = 900
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+const cross = (cx, cy, r) => `M${cx - r},${cy - r}l${2 * r},${2 * r}m0,${-2 * r}l${-2 * r},${2 * r}`
 
 export function niceStep(raw) {
   const pow = 10 ** Math.floor(Math.log10(raw))
@@ -76,8 +77,30 @@ export default function SCurveChart({ sim, p, figures, tNow, showExp, data, scen
   const expExitT = Math.log(Y.max / p.N0) / p.r
   const kEnd = sim.K[sim.steps]
   const xTicks = Array.from({ length: 6 }, (_, i) => (i * tMax) / 5)
-  const extinct = figures.outcome.kind === 'extinct' && !multi && figures.outcome.t <= tNow ? figures.outcome.t : null
-  const fastestNearEvent = sim.log.some((e) => Math.abs(e.t - figures.fastestT) < tMax / 100)
+  const extinctions = sim.extinctions
+    .map((te, j) => (te !== null && te <= tNow ? { t: te, main: j === 0 } : null))
+    .filter(Boolean)
+    .sort((a, b) => a.main - b.main)
+  let lastLabelX = -Infinity
+  const crashes = sim.crashes
+    .filter((c) => c.t <= tNow)
+    .map((c) => {
+      const cx = x(c.t)
+      const labelled = cx - lastLabelX > 56
+      if (labelled) lastLabelX = cx
+      return { ...c, cx, labelled }
+    })
+  const fastestNearEvent = sim.log.some((e) => e.t < figures.fastestT + tMax / 100)
+  const rowEnds = [-Infinity, -Infinity]
+  const flags = sim.log
+    .filter((e) => e.t <= tMax)
+    .map((e) => {
+      const fx = x(e.t)
+      const text = EVENT_KINDS[e.kind].short
+      const row = rowEnds.findIndex((end) => fx > end + 6)
+      if (row >= 0) rowEnds[row] = fx + 4 + text.length * 6.6
+      return { ...e, fx, text, row }
+    })
   const inflection =
     !multi && !p.lag.on && !p.discrete.on && !p.season.on && figures.fastestT !== null && !fastestNearEvent
       ? { t: figures.fastestT, n: valueAt(sim.det, stepAt(sim, figures.fastestT)) }
@@ -124,6 +147,14 @@ export default function SCurveChart({ sim, p, figures, tNow, showExp, data, scen
           <li><span className="swatch swatch-k" />Carrying capacity <i>K</i></li>
           {showExp && <li><span className="swatch swatch-exp" />Exponential, no limit</li>}
           {data && <li><span className="swatch-dot" />{data.label}</li>}
+          {(sim.crashes.length > 0 || sim.extinctions.some((e) => e !== null)) && (
+            <li>
+              <svg className="swatch-cross" viewBox="0 0 12 12" aria-hidden="true">
+                <path className="marker-extinct" d={cross(6, 6, 4)} />
+              </svg>
+              Die-off or extinction
+            </li>
+          )}
         </ul>
       </div>
       <div
@@ -168,7 +199,7 @@ export default function SCurveChart({ sim, p, figures, tNow, showExp, data, scen
               {multi && sim.runs.slice(1).map((N, j) => <path key={j} className="line-ghost" d={line(seriesUpTo(N, tNow))} />)}
               <path className="line-forecast" d={line(seriesUpTo(sim.runs[0], tMax))} />
               <path className="line-n" d={line(seriesUpTo(sim.runs[0], tNow))} />
-              {sim.discrete &&
+              {sim.discrete && sim.steps <= 300 &&
                 seriesUpTo(sim.runs[0], tNow).map(([px, py], i) => <circle key={i} className="gen-dot" cx={px} cy={py} r={2.5} />)}
               {data?.points.filter((d) => d.t <= tMax).map((d) => (
                 <circle key={d.t} className="data-dot" cx={x(d.t)} cy={y(d.n)} r={4} />
@@ -192,12 +223,28 @@ export default function SCurveChart({ sim, p, figures, tNow, showExp, data, scen
                 </text>
               </g>
             )}
-            {extinct !== null && (
-              <g>
-                <path className="marker-extinct" d={`M${x(extinct) - 5},${y(0) - 5}l10,10m0,-10l-10,10`} />
-                <text className="direct-label" x={x(extinct)} y={y(0) - 12} textAnchor="middle">Died out</text>
+            {crashes.map((c) => {
+              const cy = y(c.to)
+              const below = cy < M.top + ih - 24
+              return (
+                <g key={`crash-${c.t}`} className="dieoff">
+                  <path className="marker-extinct" d={cross(c.cx, cy, 4.5)} />
+                  {c.labelled && (
+                    <text className="dieoff-label" x={c.cx} y={below ? cy + 18 : cy - 10} textAnchor="middle">
+                      −{fmt((1 - c.to / c.from) * 100)}%
+                    </text>
+                  )}
+                </g>
+              )
+            })}
+            {extinctions.map((e, j) => (
+              <g key={`extinct-${j}`} className={e.main ? 'dieoff' : 'dieoff is-ghost'}>
+                <path className="marker-extinct" d={cross(x(e.t), y(0), e.main ? 6 : 4)} />
+                {e.main && (
+                  <text className="dieoff-label" x={x(e.t)} y={y(0) - 12} textAnchor="middle">Died out</text>
+                )}
               </g>
-            )}
+            ))}
 
             <line className="playhead" x1={x(tNow)} x2={x(tNow)} y1={M.top} y2={M.top + ih} />
             <circle className="marker-n" cx={x(tNow)} cy={y(clamp(now.n, 0, Y.max))} r={6} />
@@ -222,18 +269,23 @@ export default function SCurveChart({ sim, p, figures, tNow, showExp, data, scen
               onPointerLeave={() => setHoverT(null)}
             />
 
-            {sim.log.filter((e) => e.t <= tMax).map((e) => (
-              <g
-                key={e.id}
-                className="event-flag"
-                onPointerEnter={() => setHoverEvent(e)}
-                onPointerLeave={() => setHoverEvent(null)}
-              >
-                <line className="event-line" x1={x(e.t)} x2={x(e.t)} y1={M.top - 8} y2={M.top + ih} />
-                <rect className="event-hit" x={x(e.t) - 4} y={M.top - 24} width={80} height={20} />
-                <text className="event-label" x={x(e.t) + 4} y={M.top - 12}>{EVENT_KINDS[e.kind].short}</text>
-              </g>
-            ))}
+            {flags.map((e) => {
+              const ly = e.row === 1 ? M.top - 24 : M.top - 10
+              return (
+                <g
+                  key={e.id}
+                  className="event-flag"
+                  onPointerEnter={() => setHoverEvent(e)}
+                  onPointerLeave={() => setHoverEvent(null)}
+                >
+                  <line className="event-line" x1={e.fx} x2={e.fx} y1={e.row === 1 ? M.top - 20 : M.top - 6} y2={M.top + ih} />
+                  <rect className="event-hit" x={e.fx - 6} y={M.top - 34} width={e.row < 0 ? 12 : 12 + e.text.length * 6.6} height={32} />
+                  {e.row >= 0 && (
+                    <text className="event-label" x={e.fx + 4} y={ly}>{e.text}</text>
+                  )}
+                </g>
+              )
+            })}
           </svg>
         )}
 
@@ -249,7 +301,7 @@ export default function SCurveChart({ sim, p, figures, tNow, showExp, data, scen
             <div><span>Per individual</span><strong>{fmtRate(hover.perCapita)}</strong></div>
             <div><span>Share of <i>K</i></span><strong>{fmt((hover.n / hover.k) * 100)}%</strong></div>
             {showExp && (
-              <div><span>If unlimited</span><strong>{fmt(Math.min(p.N0 * Math.exp(p.r * hover.t), 1e15))}</strong></div>
+              <div><span>If unlimited</span><strong>{fmtHuge(p.N0 * Math.exp(p.r * hover.t))}</strong></div>
             )}
             {multi && (
               <div>

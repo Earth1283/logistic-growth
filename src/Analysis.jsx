@@ -1,8 +1,8 @@
-import { UNITS, fmt, fmtRate, sci } from './model.js'
+import { UNITS, fmt, fmtRate, sciFromLog10 } from './model.js'
 import { Term } from './Tip.jsx'
 
-function BigNumber({ value }) {
-  const s = sci(value)
+function BigNumber({ log10 }) {
+  const s = sciFromLog10(log10)
   if (s.text) return <>{s.text}</>
   return (
     <>
@@ -27,7 +27,7 @@ function Outcome({ outcome, u }) {
 export default function Analysis({ p, figures, now }) {
   const u = UNITS[p.unit]
   const lost = now.n / now.k
-  const overshoot = figures.expAtEnd / p.K
+  const overshootLog10 = figures.expLog10 - Math.log10(p.K)
   const direction =
     now.n <= 0
       ? 'The population is gone. Only migrants can bring it back.'
@@ -78,10 +78,10 @@ export default function Analysis({ p, figures, now }) {
         )}
         <p>
           Without limits, {fmt(p.N0)} founders growing at the same rate would number{' '}
-          <BigNumber value={figures.expAtEnd} /> after {p.tMax} {u.many},{' '}
-          {overshoot >= 1 ? (
+          <BigNumber log10={figures.expLog10} /> after {p.tMax} {u.many},{' '}
+          {overshootLog10 >= 0 ? (
             <>
-              about <BigNumber value={overshoot} /> times what this habitat can support.
+              about <BigNumber log10={overshootLog10} /> times what this habitat can support.
             </>
           ) : (
             <>still below the carrying capacity. Lengthen the time shown to see it pass.</>
@@ -144,6 +144,10 @@ export default function Analysis({ p, figures, now }) {
           <li>
             Load <em>Rare species released</em> and reroll a few times. How often does the group
             survive? Now raise the starting population.
+          </li>
+          <li>
+            Let the population settle at <i>K</i>, then hit <em>Tribble mode</em>. Crowding forces a
+            crash afterwards, and nobody even had to die of anything unusual.
           </li>
           <li>
             Load <em>Fishery under pressure</em>. Find the effort that gives the biggest catch that
