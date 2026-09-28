@@ -13,6 +13,11 @@ npm install
 npm run dev      # http://localhost:9091
 ```
 
+## Demo video and slides
+
+- `./demo/make.sh` renders a product demo video to `media/product-demo.mp4`. See [demo/README.md](demo/README.md).
+- `./deck/make.sh` builds a presentation deck to `media/logistic-growth-unhinged.pptx`. It reuses the demo footage, so make the video first. See [deck/README.md](deck/README.md).
+
 ## Caching
 
 `npm run build` writes content-hashed files to `dist/assets/`, so any change produces new filenames and browsers never see stale code. `npm run preview` serves hashed assets with `Cache-Control: public, max-age=31536000, immutable` and everything else, including `index.html`, with `no-cache` so visitors always revalidate the page. GitHub Pages does not allow custom headers; there the hashed filenames do the cache busting and Pages' default 10-minute cache applies to `index.html`.
