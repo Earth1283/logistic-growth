@@ -1,19 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { useWidth } from './useWidth.js'
-import { fmt, fmtRate, growthPhase } from './model.js'
+import { UNITS, fmt, fmtRate, growthPhase } from './model.js'
+import { mulberry32 } from './sim.js'
+import { Term } from './Tip.jsx'
 
-const MAX_DOTS = 1600
+const MAX_DOTS = 4000
+const MIN_CAPACITY = 1000
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
-
-function mulberry32(seed) {
-  return () => {
-    seed |= 0
-    seed = (seed + 0x6d2b79f5) | 0
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 const SITES = (() => {
   const rand = mulberry32(7)
@@ -45,7 +38,7 @@ function Plate({ n, k }) {
       const token = (name) => css.getPropertyValue(name).trim()
       const c = size / 2
       const R = c - 4
-      const unit = (R * 0.8) / Math.sqrt(1000)
+      const unit = (R * 0.8) / Math.sqrt(Math.max(MIN_CAPACITY, n, k))
 
       ctx.beginPath()
       ctx.arc(c, c, R, 0, Math.PI * 2)
@@ -104,14 +97,16 @@ function Plate({ n, k }) {
   )
 }
 
-export default function PlatePanel({ n, k, rate, day }) {
+export default function PlatePanel({ n, k, rate, day, unit }) {
   const share = n / k
+  const u = UNITS[unit]
   return (
     <section className="panel plate-panel" aria-label="Habitat view">
-      <h2>Habitat on day {fmt(day, 1)}</h2>
+      <h2>Habitat, {u.one} {fmt(day, 1)}</h2>
       <Plate n={n} k={k} />
       <p className="plate-caption">
-        Each dot is one individual. The dashed ring encloses the space the habitat can support.
+        Each dot is one individual. The dashed ring encloses the space the habitat can support, its{' '}
+        <Term id="carryingCapacity">carrying capacity</Term>.
       </p>
       <dl className="readouts">
         <div>
@@ -123,14 +118,14 @@ export default function PlatePanel({ n, k, rate, day }) {
           <dd className="big">{fmt(share * 100)}%</dd>
         </div>
         <div>
-          <dt>Daily change</dt>
+          <dt>Change per {u.one}</dt>
           <dd className="big">{fmtRate(rate)}</dd>
         </div>
       </dl>
       <div className="fill-meter" aria-hidden="true">
         <span style={{ width: `${Math.min(100, share * 100)}%` }} />
       </div>
-      <p className="phase">{growthPhase(n, k)}</p>
+      <p className="phase">{growthPhase(n, k, rate)}</p>
     </section>
   )
 }

@@ -1,22 +1,35 @@
 import { useRef, useState } from 'react'
 import { useWidth } from './useWidth.js'
 import { fmt, fmtRate } from './model.js'
+import { equilibria } from './sim.js'
 
 const M = { top: 26, right: 22, bottom: 46, left: 58 }
 const HEIGHT = 260
 const X_SPAN = 1.3
+const SAMPLES = 160
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
-function useFrame(k, yMin, yMax) {
+function sample(f, xMax) {
+  return Array.from({ length: SAMPLES + 1 }, (_, i) => {
+    const n = (xMax * i) / SAMPLES
+    return { n, v: f(n) }
+  })
+}
+
+function useFrame(k, pts, pad) {
   const wrapRef = useRef(null)
   const width = useWidth(wrapRef)
   const iw = Math.max(1, width - M.left - M.right)
   const ih = HEIGHT - M.top - M.bottom
   const xMax = k * X_SPAN
+  const hi = Math.max(...pts.map((d) => d.v), pad.floorHi)
+  const lo = Math.min(...pts.map((d) => d.v), -hi * 0.15)
+  const yMax = hi * 1.3
+  const yMin = lo * 1.12
   const x = (n) => M.left + (n / xMax) * iw
-  const y = (v) => M.top + ih - ((v - yMin) / (yMax - yMin)) * ih
-  return { wrapRef, width, iw, ih, xMax, x, y }
+  const y = (v) => M.top + ih - ((clamp(v, yMin, yMax) - yMin) / (yMax - yMin)) * ih
+  return { wrapRef, width, iw, ih, xMax, x, y, lo, hi }
 }
 
 function useHover(frame) {
@@ -33,15 +46,11 @@ function useHover(frame) {
 
 function Tooltip({ frame, n, rows }) {
   const left = frame.x(n)
-  const flip = left > frame.width - 170
+  const flip = left > frame.width - 190
   return (
     <div
       className="tooltip"
-      style={{
-        left: flip ? undefined : left + 14,
-        right: flip ? frame.width - left + 14 : undefined,
-        top: M.top,
-      }}
+      style={{ left: flip ? undefined : left + 14, right: flip ? frame.width - left + 14 : undefined, top: M.top }}
     >
       <div className="tooltip-title">
         <i>N</i> = {fmt(n)}
@@ -60,8 +69,8 @@ function Axes({ frame, k, yTicks, yTitle }) {
   const { x, y, iw, ih } = frame
   return (
     <>
-      {yTicks.map((v) => (
-        <g key={v}>
+      {yTicks.map((v, i) => (
+        <g key={i}>
           <line className={v === 0 ? 'axis' : 'grid'} x1={M.left} x2={M.left + iw} y1={y(v)} y2={y(v)} />
           <text className="tick" x={M.left - 10} y={y(v) + 4} textAnchor="end">{fmtRate(v)}</text>
         </g>
@@ -84,53 +93,67 @@ function Axes({ frame, k, yTicks, yTitle }) {
   )
 }
 
-function linePath(frame, f, samples = 140) {
-  let d = ''
-  for (let i = 0; i <= samples; i++) {
-    const n = (frame.xMax * i) / samples
-    d += `${i ? 'L' : 'M'}${frame.x(n).toFixed(1)},${frame.y(f(n)).toFixed(1)}`
-  }
-  return d
-}
+const pathOf = (frame, pts) =>
+  pts.map((d, i) => `${i ? 'L' : 'M'}${frame.x(d.n).toFixed(1)},${frame.y(d.v).toFixed(1)}`).join('')
 
 function chevron(cx, cy, dir) {
   return `M${cx - 4 * dir},${cy - 5}L${cx + 3 * dir},${cy}L${cx - 4 * dir},${cy + 5}`
 }
 
-export function GrowthRateChart({ r, k, n }) {
-  const f = (N) => r * N * (1 - N / k)
-  const peak = (r * k) / 4
-  const yMax = peak * 1.3
-  const yMin = f(k * X_SPAN) * 1.08
-  const frame = useFrame(k, yMin, yMax)
+function equilibriumLabel(eq, narrow) {
+  if (eq.n === 0) return eq.stable ? 'Extinction trap' : narrow ? 'Unstable' : 'Extinction, unstable'
+  if (eq.stable) return narrow ? 'Stable' : 'Stable equilibrium'
+  return narrow ? 'Unstable' : 'Tipping point'
+}
+
+export function GrowthRateChart({ sim, k, n, t, lagTau, unit }) {
+  const f = (N) => sim.model.change(N, N, k, t)
+  const pts = sample(f, k * X_SPAN)
+  const frame = useFrame(k, pts, { floorHi: 1e-6 })
   const [hoverN, handlers] = useHover(frame)
-  const { wrapRef, width, x, y, iw, ih } = frame
-  const nc = clamp(n, 0, frame.xMax)
+  const { wrapRef, width, x, y, iw, ih, xMax } = frame
+  const nc = clamp(n, 0, xMax)
   const zero = y(0)
   const narrow = iw < 380
+  const eqs = equilibria(f, xMax, sim.discrete, lagTau)
+  const peak = pts.reduce((a, b) => (b.v > a.v ? b : a))
+  const bounds = [...eqs.map((e) => e.n), xMax]
+  const flows = bounds.slice(0, -1).map((a, i) => {
+    const mid = (a + bounds[i + 1]) / 2
+    return { mid, dir: Math.sign(f(mid)) }
+  }).filter((d) => d.dir !== 0 && x(d.mid) - M.left > 14)
+  let lastLabelX = -Infinity
 
   return (
     <div ref={wrapRef} className="chart-body small">
       {width > 0 && (
         <svg width={width} height={HEIGHT} className="svg">
-          <Axes frame={frame} k={k} yTicks={[f(k * X_SPAN), 0, peak]} yTitle="Change per day" />
-          <path className="line-n" d={linePath(frame, f)} />
+          <Axes frame={frame} k={k} yTicks={[frame.lo, 0, peak.v > 0 ? peak.v : frame.hi]} yTitle={`Change per ${unit}`} />
+          <path className="line-n" d={pathOf(frame, pts)} />
 
-          <path className="flow" d={chevron(x(k * 0.28), zero, 1)} />
-          <path className="flow" d={chevron(x(k * 0.72), zero, 1)} />
-          <path className="flow" d={chevron(x(k * 1.16), zero, -1)} />
+          {flows.map((d) => <path key={d.mid} className="flow" d={chevron(x(d.mid), zero, d.dir)} />)}
 
-          <text className="direct-label" x={x(k / 2)} y={y(peak) - 10} textAnchor="middle">
-            Peak <tspan className="math">rK</tspan>/4 = {fmtRate(peak)} per day
-          </text>
-          <circle className="marker-unstable" cx={x(0)} cy={zero} r={4.5} />
-          <text className="direct-label" x={x(0) + 10} y={zero + 18}>
-            {narrow ? 'Unstable' : 'Extinction, unstable'}
-          </text>
-          <circle className="marker-k" cx={x(k)} cy={zero} r={5.5} />
-          <text className="direct-label" x={x(k) - 10} y={zero + 18} textAnchor="end">
-            {narrow ? 'Stable' : 'Stable equilibrium'}
-          </text>
+          {peak.v > 0 && (
+            <text className="direct-label" x={clamp(x(peak.n), M.left + 90, M.left + iw - 90)} y={y(peak.v) - 10} textAnchor="middle">
+              Fastest: {fmtRate(peak.v)} per {unit} at <tspan className="math">N</tspan> = {fmt(peak.n)}
+            </text>
+          )}
+          {eqs.map((eq) => {
+            const ex = x(eq.n)
+            const showLabel = ex - lastLabelX > 110
+            if (showLabel) lastLabelX = ex
+            const end = ex > M.left + iw * 0.6
+            return (
+              <g key={eq.n}>
+                <circle className={eq.stable ? 'marker-k' : 'marker-unstable'} cx={ex} cy={zero} r={eq.stable ? 5.5 : 4.5} />
+                {showLabel && (
+                  <text className="direct-label" x={end ? ex - 10 : ex + 10} y={zero + 18} textAnchor={end ? 'end' : 'start'}>
+                    {equilibriumLabel(eq, narrow)}
+                  </text>
+                )}
+              </g>
+            )
+          })}
 
           <circle className="marker-n" cx={x(nc)} cy={y(f(nc))} r={6} />
 
@@ -148,8 +171,8 @@ export function GrowthRateChart({ r, k, n }) {
           frame={frame}
           n={hoverN}
           rows={[
-            ['Change per day', fmtRate(f(hoverN))],
-            ['Direction', hoverN < k * 0.995 ? 'Rising toward K' : hoverN > k * 1.005 ? 'Falling toward K' : 'Holding at K'],
+            [`Change per ${unit}`, fmtRate(f(hoverN))],
+            ['Direction', f(hoverN) > 0.01 ? 'Growing' : f(hoverN) < -0.01 ? 'Shrinking' : 'Holding steady'],
           ]}
         />
       )}
@@ -157,32 +180,36 @@ export function GrowthRateChart({ r, k, n }) {
   )
 }
 
-export function PerCapitaChart({ r, k, n }) {
-  const g = (N) => r * (1 - N / k)
-  const yMax = r * 1.25
-  const yMin = g(k * X_SPAN) * 1.2
-  const frame = useFrame(k, yMin, yMax)
+export function PerCapitaChart({ sim, k, n, t, unit }) {
+  const g = (N) => sim.model.change(Math.max(N, 1e-6), Math.max(N, 1e-6), k, t) / Math.max(N, 1e-6)
+  const r = sim.model.rAt(t)
+  const rShown = sim.discrete ? Math.expm1(r) : r
+  const pts = sample(g, k * X_SPAN)
+  const frame = useFrame(k, pts, { floorHi: rShown })
   const [hoverN, handlers] = useHover(frame)
   const { wrapRef, width, x, y, iw, ih } = frame
   const nc = clamp(n, 0, frame.xMax)
-  const resistance = n / k
+  const lost = Math.max(0, (rShown - g(nc)) / rShown)
+  const under = pts.filter((d) => d.n <= nc)
+  const polygon = [
+    [x(0), y(rShown)],
+    [x(nc), y(rShown)],
+    [x(nc), y(g(nc))],
+    ...under.reverse().map((d) => [x(d.n), y(d.v)]),
+  ]
 
   return (
     <>
       <div ref={wrapRef} className="chart-body small">
         {width > 0 && (
           <svg width={width} height={HEIGHT} className="svg">
-            <Axes frame={frame} k={k} yTicks={[g(k * X_SPAN), 0, r]} yTitle="Per individual per day" />
-            <polygon
-              className="resistance"
-              points={`${x(0)},${y(r)} ${x(nc)},${y(r)} ${x(nc)},${y(g(nc))}`}
-            />
-            <line className="line-exp" x1={M.left} x2={M.left + iw} y1={y(r)} y2={y(r)} />
-            <text className="direct-label" x={M.left + iw} y={y(r) - 8} textAnchor="end">
-              Without limits: <tspan className="math">r</tspan> = {fmt(r, 2)}
+            <Axes frame={frame} k={k} yTicks={[frame.lo, 0, rShown]} yTitle={`Per individual per ${unit}`} />
+            <polygon className="resistance" points={polygon.map((d) => d.join(',')).join(' ')} />
+            <line className="line-exp" x1={M.left} x2={M.left + iw} y1={y(rShown)} y2={y(rShown)} />
+            <text className="direct-label" x={M.left + iw} y={y(rShown) - 8} textAnchor="end">
+              Without limits: {fmt(rShown, 2)}
             </text>
-            <path className="line-n" d={linePath(frame, g, 2)} />
-            <circle className="marker-k" cx={x(k)} cy={y(0)} r={5.5} />
+            <path className="line-n" d={pathOf(frame, pts)} />
             <circle className="marker-n" cx={x(nc)} cy={y(g(nc))} r={6} />
 
             {hoverN !== null && (
@@ -200,14 +227,14 @@ export function PerCapitaChart({ r, k, n }) {
             n={hoverN}
             rows={[
               ['Per individual', fmtRate(g(hoverN))],
-              ['Growth lost', `${fmt((hoverN / k) * 100)}%`],
+              ['Growth lost', `${fmt(Math.max(0, (rShown - g(hoverN)) / rShown) * 100)}%`],
             ]}
           />
         )}
       </div>
       <p className="figure-note">
         <span className="swatch swatch-resistance" />
-        At the current population of {fmt(n)}, crowding removes {fmt(resistance * 100)}% of the
+        At the current population of {fmt(n)}, the environment removes {fmt(lost * 100)}% of the
         growth each individual could achieve.
       </p>
     </>

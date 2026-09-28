@@ -1,51 +1,92 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useSize } from './useWidth.js'
-import { EVENT_KINDS, fmt, fmtRate, stateAt } from './model.js'
+import { EVENT_KINDS, UNITS, cap, fmt, fmtRate, growthPhase } from './model.js'
+import { stateAt, stepAt, valueAt } from './sim.js'
 
-const Y_MAX = 1200
-const Y_TICKS = [0, 200, 400, 600, 800, 1000, 1200]
-const M = { top: 30, right: 76, bottom: 46, left: 58 }
+const M = { top: 34, right: 76, bottom: 46, left: 58 }
+const TARGET_POINTS = 900
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
-export default function SCurveChart({
-  points, segments, r, N0, tMax, tNow, showExp, events, inflection, onScrub,
-}) {
+export function niceStep(raw) {
+  const pow = 10 ** Math.floor(Math.log10(raw))
+  return [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw)
+}
+
+function sampleSteps(sim) {
+  const stride = Math.max(1, Math.floor(sim.steps / TARGET_POINTS))
+  const set = new Set()
+  for (let i = 0; i < sim.steps; i += stride) set.add(i)
+  set.add(sim.steps)
+  for (const i of sim.eventSteps) {
+    if (i > 0) set.add(i - 1)
+    set.add(Math.min(i, sim.steps))
+  }
+  return [...set].sort((a, b) => a - b)
+}
+
+function yScale(sim, p) {
+  let top = p.K
+  for (const N of sim.runs) for (const v of N) top = Math.max(top, v)
+  for (const v of sim.K) top = Math.max(top, v)
+  const step = niceStep((top * 1.08) / 5)
+  const max = Math.ceil((top * 1.08) / step) * step
+  return { max, ticks: Array.from({ length: Math.round(max / step) + 1 }, (_, i) => i * step) }
+}
+
+export default function SCurveChart({ sim, p, figures, tNow, showExp, data, sceneKey, onScrub }) {
   const wrapRef = useRef(null)
   const svgRef = useRef(null)
   const dragging = useRef(false)
   const [hoverT, setHoverT] = useState(null)
+  const [hoverEvent, setHoverEvent] = useState(null)
   const { width, height } = useSize(wrapRef)
+  const u = UNITS[p.unit]
+  const { tMax } = p
   const iw = Math.max(1, width - M.left - M.right)
   const ih = height - M.top - M.bottom
+  const Y = useMemo(() => yScale(sim, p), [sim, p])
   const x = (t) => M.left + (t / tMax) * iw
-  const y = (n) => M.top + ih - (n / Y_MAX) * ih
-  const path = (pts, key = 'n') =>
-    pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p[key]).toFixed(1)}`).join('')
+  const y = (n) => M.top + ih - (n / Y.max) * ih
+  const line = (pts) => pts.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join('')
 
-  const now = stateAt(segments, r, tNow)
-  const observed = [...points.filter((p) => p.t <= tNow), { t: tNow, n: now.n }]
-  const kEnd = points[points.length - 1]?.k ?? 0
+  const steps = useMemo(() => sampleSteps(sim), [sim])
+  const seriesUpTo = (arr, t) => {
+    const pts = []
+    for (const i of steps) {
+      if (i * sim.dt > t) break
+      pts.push([x(i * sim.dt), y(arr[i])])
+    }
+    if (!sim.discrete) pts.push([x(t), y(valueAt(arr, stepAt(sim, t)))])
+    return pts
+  }
+
+  const now = stateAt(sim, p, tNow)
+  const multi = sim.runs.length > 1
 
   const expPts = []
   if (showExp) {
     for (let i = 0; i <= 240; i++) {
       const t = (tMax * i) / 240
-      const n = N0 * Math.exp(r * t)
-      expPts.push({ t, n })
-      if (n > Y_MAX * 1.2) break
+      const n = p.N0 * Math.exp(p.r * t)
+      expPts.push([x(t), y(n)])
+      if (n > Y.max * 1.2) break
     }
   }
-  const expExit = expPts.find((p) => p.n >= Y_MAX)
-
-  const xStep = tMax / 5
-  const xTicks = Array.from({ length: 6 }, (_, i) => i * xStep)
+  const expExitT = Math.log(Y.max / p.N0) / p.r
+  const kEnd = sim.K[sim.steps]
+  const xTicks = Array.from({ length: 6 }, (_, i) => (i * tMax) / 5)
+  const extinct = figures.outcome.kind === 'extinct' && !multi && figures.outcome.t <= tNow ? figures.outcome.t : null
+  const fastestNearEvent = sim.log.some((e) => Math.abs(e.t - figures.fastestT) < tMax / 100)
+  const inflection =
+    !multi && !p.lag.on && !p.discrete.on && !p.season.on && figures.fastestT !== null && !fastestNearEvent
+      ? { t: figures.fastestT, n: valueAt(sim.det, stepAt(sim, figures.fastestT)) }
+      : null
 
   const tFromEvent = (e) => {
     const rect = svgRef.current.getBoundingClientRect()
     return clamp(((e.clientX - rect.left - M.left) / iw) * tMax, 0, tMax)
   }
-
   const onPointerDown = (e) => {
     e.currentTarget.setPointerCapture(e.pointerId)
     dragging.current = true
@@ -59,7 +100,6 @@ export default function SCurveChart({
   const onPointerUp = () => {
     dragging.current = false
   }
-
   const onKeyDown = (e) => {
     const step = e.shiftKey ? tMax / 10 : tMax / 100
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') onScrub(clamp(tNow + step, 0, tMax))
@@ -70,9 +110,9 @@ export default function SCurveChart({
     e.preventDefault()
   }
 
-  const hover = hoverT === null ? null : { t: hoverT, ...stateAt(segments, r, hoverT) }
-  const tipLeft = hover ? x(hover.t) : 0
-  const tipFlip = tipLeft > width - 190
+  const hover = hoverT === null ? null : { t: hoverT, ...stateAt(sim, p, hoverT) }
+  const tipX = hover ? x(hover.t) : hoverEvent ? x(hoverEvent.t) : 0
+  const tipFlip = tipX > width - 220
 
   return (
     <div className="chart">
@@ -80,8 +120,10 @@ export default function SCurveChart({
         <h2>Population over time</h2>
         <ul className="legend">
           <li><span className="swatch swatch-n" />Population <i>N</i></li>
+          {multi && <li><span className="swatch swatch-ghost" />Other runs, same rules</li>}
           <li><span className="swatch swatch-k" />Carrying capacity <i>K</i></li>
           {showExp && <li><span className="swatch swatch-exp" />Exponential, no limit</li>}
+          {data && <li><span className="swatch-dot" />{data.label}</li>}
         </ul>
       </div>
       <div
@@ -89,11 +131,11 @@ export default function SCurveChart({
         className="chart-body"
         tabIndex={0}
         role="slider"
-        aria-label="Playhead day"
+        aria-label={`Playhead ${u.one}`}
         aria-valuemin={0}
         aria-valuemax={tMax}
         aria-valuenow={Math.round(tNow * 10) / 10}
-        aria-valuetext={`Day ${fmt(tNow, 1)}, ${fmt(now.n)} individuals`}
+        aria-valuetext={`${cap(u.one)} ${fmt(tNow, 1)}, ${fmt(now.n)} individuals`}
         onKeyDown={onKeyDown}
       >
         {width > 0 && height > 0 && (
@@ -104,7 +146,7 @@ export default function SCurveChart({
               </clipPath>
             </defs>
 
-            {Y_TICKS.map((v) => (
+            {Y.ticks.map((v) => (
               <g key={v}>
                 <line className={v === 0 ? 'axis' : 'grid'} x1={M.left} x2={M.left + iw} y1={y(v)} y2={y(v)} />
                 <text className="tick" x={M.left - 10} y={y(v) + 4} textAnchor="end">{fmt(v)}</text>
@@ -113,28 +155,29 @@ export default function SCurveChart({
             {xTicks.map((v) => (
               <text key={v} className="tick" x={x(v)} y={M.top + ih + 20} textAnchor="middle">{fmt(v)}</text>
             ))}
-            <text className="axis-title" x={M.left + iw / 2} y={height - 6} textAnchor="middle">Time (days)</text>
+            <text className="axis-title" x={M.left + iw / 2} y={height - 6} textAnchor="middle">
+              Time ({u.many})
+            </text>
             <text className="axis-title" transform={`translate(14 ${M.top + ih / 2}) rotate(-90)`} textAnchor="middle">
               Individuals
             </text>
 
-            {events.filter((e) => e.t <= tMax).map((e) => (
-              <g key={e.id}>
-                <line className="event-line" x1={x(e.t)} x2={x(e.t)} y1={M.top - 6} y2={M.top + ih} />
-                <text className="event-label" x={x(e.t) + 4} y={M.top - 10}>{EVENT_KINDS[e.kind].short}</text>
-              </g>
-            ))}
-
-            <g clipPath="url(#plot-clip)">
-              {showExp && <path className="line-exp" d={path(expPts)} />}
-              <path className="line-k" d={path(points, 'k')} />
-              <path className="line-forecast" d={path(points)} />
-              <path className="line-n" d={path(observed)} />
+            <g key={sceneKey} className="scene" clipPath="url(#plot-clip)">
+              {showExp && <path className="line-exp" d={line(expPts)} />}
+              <path className="line-k" d={line(seriesUpTo(sim.K, tMax))} />
+              {multi && sim.runs.slice(1).map((N, j) => <path key={j} className="line-ghost" d={line(seriesUpTo(N, tNow))} />)}
+              <path className="line-forecast" d={line(seriesUpTo(sim.runs[0], tMax))} />
+              <path className="line-n" d={line(seriesUpTo(sim.runs[0], tNow))} />
+              {sim.discrete &&
+                seriesUpTo(sim.runs[0], tNow).map(([px, py], i) => <circle key={i} className="gen-dot" cx={px} cy={py} r={2.5} />)}
+              {data?.points.filter((d) => d.t <= tMax).map((d) => (
+                <circle key={d.t} className="data-dot" cx={x(d.t)} cy={y(d.n)} r={4} />
+              ))}
             </g>
 
-            {showExp && expExit && (
-              <text className="direct-label" x={x(expExit.t) + 6} y={M.top + 12}>
-                Exponential passes 1,200 on day {fmt(expExit.t, 0)}
+            {showExp && expExitT < tMax && (
+              <text className="direct-label" x={x(expExitT) + 6} y={M.top + 12}>
+                Exponential passes {fmt(Y.max)} at {u.one} {fmt(expExitT, 0)}
               </text>
             )}
             <text className="k-label" x={M.left + iw + 8} y={clamp(y(kEnd), M.top + 4, M.top + ih) + 4}>
@@ -145,18 +188,24 @@ export default function SCurveChart({
               <g>
                 <circle className="marker-inflection" cx={x(inflection.t)} cy={y(inflection.n)} r={5} />
                 <text className="direct-label" x={x(inflection.t) + 10} y={y(inflection.n) + 16}>
-                  Fastest growth, day {fmt(inflection.t, 1)}
+                  Fastest growth, {u.one} {fmt(inflection.t, 1)}
                 </text>
+              </g>
+            )}
+            {extinct !== null && (
+              <g>
+                <path className="marker-extinct" d={`M${x(extinct) - 5},${y(0) - 5}l10,10m0,-10l-10,10`} />
+                <text className="direct-label" x={x(extinct)} y={y(0) - 12} textAnchor="middle">Died out</text>
               </g>
             )}
 
             <line className="playhead" x1={x(tNow)} x2={x(tNow)} y1={M.top} y2={M.top + ih} />
-            <circle className="marker-n" cx={x(tNow)} cy={y(clamp(now.n, 0, Y_MAX))} r={6} />
+            <circle className="marker-n" cx={x(tNow)} cy={y(clamp(now.n, 0, Y.max))} r={6} />
 
             {hover && (
               <g pointerEvents="none">
                 <line className="crosshair" x1={x(hover.t)} x2={x(hover.t)} y1={M.top} y2={M.top + ih} />
-                <circle className="marker-hover" cx={x(hover.t)} cy={y(clamp(hover.n, 0, Y_MAX))} r={4.5} />
+                <circle className="marker-hover" cx={x(hover.t)} cy={y(clamp(hover.n, 0, Y.max))} r={4.5} />
               </g>
             )}
 
@@ -172,22 +221,64 @@ export default function SCurveChart({
               onPointerCancel={onPointerUp}
               onPointerLeave={() => setHoverT(null)}
             />
+
+            {sim.log.filter((e) => e.t <= tMax).map((e) => (
+              <g
+                key={e.id}
+                className="event-flag"
+                onPointerEnter={() => setHoverEvent(e)}
+                onPointerLeave={() => setHoverEvent(null)}
+              >
+                <line className="event-line" x1={x(e.t)} x2={x(e.t)} y1={M.top - 8} y2={M.top + ih} />
+                <rect className="event-hit" x={x(e.t) - 4} y={M.top - 24} width={80} height={20} />
+                <text className="event-label" x={x(e.t) + 4} y={M.top - 12}>{EVENT_KINDS[e.kind].short}</text>
+              </g>
+            ))}
           </svg>
         )}
+
         {hover && (
           <div
             className="tooltip"
-            style={{
-              left: tipFlip ? undefined : tipLeft + 14,
-              right: tipFlip ? width - tipLeft + 14 : undefined,
-              top: M.top + 8,
-            }}
+            style={{ left: tipFlip ? undefined : tipX + 14, right: tipFlip ? width - tipX + 14 : undefined, top: M.top + 8 }}
           >
-            <div className="tooltip-title">Day {fmt(hover.t, 1)}</div>
+            <div className="tooltip-title">{cap(u.one)} {fmt(hover.t, 1)}</div>
             <div><span>Population</span><strong>{fmt(hover.n)}</strong></div>
-            <div><span>Change per day</span><strong>{fmtRate(hover.rate)}</strong></div>
+            <div><span>Carrying capacity</span><strong>{fmt(hover.k)}</strong></div>
+            <div><span>Change per {u.one}</span><strong>{fmtRate(hover.rate)}</strong></div>
+            <div><span>Per individual</span><strong>{fmtRate(hover.perCapita)}</strong></div>
             <div><span>Share of <i>K</i></span><strong>{fmt((hover.n / hover.k) * 100)}%</strong></div>
+            {showExp && (
+              <div><span>If unlimited</span><strong>{fmt(Math.min(p.N0 * Math.exp(p.r * hover.t), 1e15))}</strong></div>
+            )}
+            {multi && (
+              <div>
+                <span>Runs alive</span>
+                <strong>
+                  {hover.runsAlive} of {sim.runs.length}
+                  {hover.runsAlive > 1 && `, ${fmt(hover.runsMin)} to ${fmt(hover.runsMax)}`}
+                </strong>
+              </div>
+            )}
+            <div className="tooltip-phase">{growthPhase(hover.n, hover.k, hover.rate)}</div>
             <div className="tooltip-hint">Click or drag to move the playhead</div>
+          </div>
+        )}
+        {!hover && hoverEvent && (
+          <div
+            className="tooltip tooltip-event"
+            style={{ left: tipFlip ? undefined : tipX + 10, right: tipFlip ? width - tipX + 10 : undefined, top: M.top + 4 }}
+          >
+            <div className="tooltip-title">
+              {EVENT_KINDS[hoverEvent.kind].short}, {u.one} {fmt(hoverEvent.t, 1)}
+            </div>
+            <p>{EVENT_KINDS[hoverEvent.kind].what(hoverEvent.amount, p.unit)}</p>
+            {hoverEvent.after !== hoverEvent.before && (
+              <div><span>Population</span><strong>{fmt(hoverEvent.before)} to {fmt(hoverEvent.after)}</strong></div>
+            )}
+            {Math.abs(hoverEvent.kAfter - hoverEvent.kBefore) > 1 && (
+              <div><span>Carrying capacity</span><strong>{fmt(hoverEvent.kBefore)} to {fmt(hoverEvent.kAfter)}</strong></div>
+            )}
           </div>
         )}
       </div>
