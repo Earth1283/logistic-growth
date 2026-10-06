@@ -3,6 +3,9 @@ export const UNITS = {
   day: { one: 'day', many: 'days' },
   week: { one: 'week', many: 'weeks' },
   year: { one: 'year', many: 'years' },
+  album: { one: 'Taylor Swift album', many: 'Taylor Swift albums' },
+  microwave: { one: 'microwave minute', many: 'microwave minutes' },
+  school: { one: 'school day', many: 'school days' },
 }
 
 export const cap = (s) => s[0].toUpperCase() + s.slice(1)

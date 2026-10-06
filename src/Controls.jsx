@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { EVENT_KINDS, UNITS, fmt } from './model.js'
+import { EVENT_KINDS, UNITS, cap, fmt } from './model.js'
 import { PRESETS } from './presets.js'
 import { delayRegimes, discreteRegimes } from './sim.js'
 import Slider from './Slider.jsx'
@@ -240,11 +240,21 @@ export default function Controls({
               ends={['Coffee break', 'Geological']}
               info={
                 <Explain>
-                  How long the simulation runs. Play always takes about 10 seconds, so longer spans
+                  How long the simulation runs. Play always takes about 20 seconds, so longer spans
                   play faster.
                 </Explain>
               }
             />
+            <div className="field">
+              <label htmlFor="time-unit">Time unit</label>
+              <select id="time-unit" className="select" value={p.unit} onChange={(e) => setParam({ unit: e.target.value })}>
+                {Object.entries(UNITS).map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {cap(name.many)}
+                  </option>
+                ))}
+              </select>
+            </div>
             <label className="check" htmlFor="show-exp">
               <input id="show-exp" type="checkbox" checked={showExp} onChange={(e) => setShowExp(e.target.checked)} />
               <span>

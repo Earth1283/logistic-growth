@@ -1,3 +1,5 @@
+import { UNITS } from './model.js'
+
 export const DEFAULT_PARAMS = {
   K: 600,
   r: 0.35,
@@ -98,7 +100,7 @@ export function randomWorld(rand = Math.random) {
     r,
     N0: Math.round(between(2, 80)),
     tMax: [50, 100, 200, 500][Math.floor(rand() * 4)],
-    unit: ['hour', 'day', 'week', 'year'][Math.floor(rand() * 4)],
+    unit: Object.keys(UNITS)[Math.floor(rand() * Object.keys(UNITS).length)],
     seed: Math.floor(rand() * 1e6),
     discrete: { on: discrete },
     lag: { on: !discrete && coin(0.4), tau: Number(between(0.3, 2.4 / r).toFixed(1)) },

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { figures as computeFigures, simulate, stateAt } from './sim.js'
+import { figures as computeFigures, simulate, stateAt, stepAt } from './sim.js'
 import { EVENT_KINDS } from './model.js'
 import { DEFAULT_PARAMS, PRESETS, paramsFor, randomWorld } from './presets.js'
 import { downloadCSV } from './exportCsv.js'
@@ -13,8 +13,15 @@ import Analysis from './Analysis.jsx'
 import ThemeSwitch from './ThemeSwitch.jsx'
 import WelcomeModal, { hasSeenWelcome } from './WelcomeModal.jsx'
 import { Term } from './Tip.jsx'
+import Narrator from './Narrator.jsx'
+import { narrate, peakCurve } from './narrator.js'
+import { playEventClip, useSoundsReady } from './sounds.js'
+import { useSound } from './useSound.js'
+import SoundLoader from './SoundLoader.jsx'
+import PlayerBar from './PlayerBar.jsx'
+import { useVisibleShare } from './useVisibleShare.js'
 
-const PLAY_SECONDS = 10
+const PLAY_SECONDS = 20
 
 const reducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -27,10 +34,16 @@ export default function App() {
   const [events, setEvents] = useState([])
   const [amounts, setAmounts] = useState({ harvest: 0.6, migrants: 300, shrink: 0.4 })
   const [speed, setSpeed] = useState(1)
+  const [sound, setSound] = useState(false)
+  const [narratorOn, setNarratorOn] = useState(false)
   const [welcomeOpen, setWelcomeOpen] = useState(() => !hasSeenWelcome())
   const [tNow, setTNow] = useState(() => (reducedMotion() ? DEFAULT_PARAMS.tMax : 0))
-  const [playing, setPlaying] = useState(() => !reducedMotion() && hasSeenWelcome())
+  const [playing, setPlaying] = useState(false)
+  const soundsReady = useSoundsReady()
+  const autoStarted = useRef(false)
   const nextId = useRef(1)
+  const chartRef = useRef(null)
+  const chartVisible = useVisibleShare(chartRef, 0.2)
 
   const t = Math.min(tNow, p.tMax)
   const atEnd = t >= p.tMax
@@ -38,6 +51,10 @@ export default function App() {
   const figures = useMemo(() => computeFigures(sim, p), [sim, p])
   const now = stateAt(sim, p, t)
   const preset = PRESETS.find((x) => x.id === presetId)
+  const peaks = useMemo(() => peakCurve(sim), [sim])
+  const line = narrate({ now, t, p, events, sceneKey, peak: peaks[Math.min(peaks.length - 1, Math.floor(stepAt(sim, t)))] })
+
+  useSound({ enabled: sound, playing, n: now.n, k: now.k, t })
 
   const setParam = (patch) => setP((prev) => ({ ...prev, ...patch }))
   const setFeature = (key, patch) => setP((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
@@ -55,6 +72,12 @@ export default function App() {
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
   }, [playing, p.tMax, speed])
+
+  useEffect(() => {
+    if (autoStarted.current || !soundsReady || welcomeOpen || reducedMotion()) return
+    autoStarted.current = true
+    if (tNow === 0 && !playing) setPlaying(true)
+  }, [soundsReady, welcomeOpen, tNow, playing])
 
   useEffect(() => {
     if (playing && atEnd) setPlaying(false)
@@ -89,13 +112,13 @@ export default function App() {
 
   const closeWelcome = () => {
     setWelcomeOpen(false)
-    if (!reducedMotion() && tNow === 0) setPlaying(true)
   }
 
   const addEvent = (kind) => {
     const duration = EVENT_KINDS[kind].duration
     const amount = duration ? duration(p.tMax, p.r) : amounts[kind]
     setEvents((list) => [...list, { id: nextId.current++, t, kind, amount }])
+    if (sound) playEventClip(kind)
   }
 
   return (
@@ -137,7 +160,7 @@ export default function App() {
         />
 
         <main className="main">
-          <section className="panel chart-panel" aria-label="Population over time">
+          <section ref={chartRef} className="panel chart-panel" aria-label="Population over time">
             <ChartToolbar
               playing={playing}
               atEnd={atEnd}
@@ -148,7 +171,12 @@ export default function App() {
               onTogglePlay={togglePlay}
               onRestart={restart}
               onExport={() => downloadCSV(sim, p)}
+              sound={sound}
+              onToggleSound={() => setSound((on) => !on)}
+              narrator={narratorOn}
+              onToggleNarrator={() => setNarratorOn((on) => !on)}
             />
+            {narratorOn && <Narrator line={line} />}
             <SCurveChart
               sim={sim}
               p={p}
@@ -209,6 +237,19 @@ export default function App() {
         </main>
       </div>
       <WelcomeModal open={welcomeOpen} onClose={closeWelcome} />
+      <PlayerBar
+        hidden={chartVisible}
+        playing={playing}
+        atEnd={atEnd}
+        t={t}
+        tMax={p.tMax}
+        unit={p.unit}
+        now={now}
+        events={events}
+        onTogglePlay={togglePlay}
+        onScrub={scrub}
+      />
+      <SoundLoader />
     </div>
   )
 }
