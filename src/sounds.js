@@ -3,24 +3,28 @@ import { useEffect, useState } from 'react'
 const BASE = import.meta.env.BASE_URL
 
 export const CLIPS = {
-  crash: 'sad-violin.mp3',
   extinct: 'windows-xp-error.mp3',
   meteor: 'metal-pipe-falling.mp3',
   hit: 'oof-sound-effect.mp3',
   klonk: 'klonk.mp3',
   yay: 'yay.mp3',
+  sus: 'among-us-role-reveal-sound.mp3',
+  pay: 'applepay.mp3',
+  click: 'click-nice.mp3',
 }
 
 const EVENT_CLIPS = {
   meteor: 'meteor',
   harvest: 'hit',
   plague: 'hit',
-  predators: 'hit',
+  mood: 'hit',
+  predators: 'sus',
   shrink: 'klonk',
   clones: 'klonk',
   restore: 'yay',
   farming: 'yay',
-  fertilizer: 'yay',
+  fertilizer: 'pay',
+  migrants: 'click',
 }
 
 const urls = new Map()
