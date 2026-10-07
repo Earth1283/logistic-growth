@@ -17,6 +17,8 @@ import Narrator from './Narrator.jsx'
 import { narrate, peakCurve } from './narrator.js'
 import { playEventClip, useSoundsReady } from './sounds.js'
 import { useSound } from './useSound.js'
+import { useExtinction } from './useExtinction.js'
+import ErrorDialog from './ErrorDialog.jsx'
 import SoundLoader from './SoundLoader.jsx'
 import PlayerBar from './PlayerBar.jsx'
 import { useVisibleShare } from './useVisibleShare.js'
@@ -39,6 +41,7 @@ export default function App() {
   const [welcomeOpen, setWelcomeOpen] = useState(() => !hasSeenWelcome())
   const [tNow, setTNow] = useState(() => (reducedMotion() ? DEFAULT_PARAMS.tMax : 0))
   const [playing, setPlaying] = useState(false)
+  const [extinction, setExtinction] = useState(null)
   const soundsReady = useSoundsReady()
   const autoStarted = useRef(false)
   const nextId = useRef(1)
@@ -55,6 +58,15 @@ export default function App() {
   const line = narrate({ now, t, p, events, sceneKey, peak: peaks[Math.min(peaks.length - 1, Math.floor(stepAt(sim, t)))] })
 
   useSound({ enabled: sound, playing, n: now.n, k: now.k, t })
+  useExtinction({
+    playing,
+    n: now.n,
+    t,
+    onExtinct: () => {
+      setPlaying(false)
+      setExtinction({ t, k: now.k, unit: p.unit, name: preset?.name ?? 'Untitled population' })
+    },
+  })
 
   const setParam = (patch) => setP((prev) => ({ ...prev, ...patch }))
   const setFeature = (key, patch) => setP((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
@@ -237,6 +249,14 @@ export default function App() {
         </main>
       </div>
       <WelcomeModal open={welcomeOpen} onClose={closeWelcome} />
+      <ErrorDialog
+        info={extinction}
+        onClose={() => setExtinction(null)}
+        onRestart={() => {
+          setExtinction(null)
+          restart()
+        }}
+      />
       <PlayerBar
         hidden={chartVisible}
         playing={playing}
