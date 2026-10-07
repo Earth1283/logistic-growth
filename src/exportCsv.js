@@ -22,12 +22,15 @@ export function toCSV(sim, p) {
   return rows.join('\n')
 }
 
-export function downloadCSV(sim, p) {
-  const blob = new Blob([toCSV(sim, p)], { type: 'text/csv' })
+export function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `logistic-growth-K${p.K}-r${p.r}.csv`
+  a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+export function downloadCSV(sim, p) {
+  saveBlob(new Blob([toCSV(sim, p)], { type: 'text/csv' }), `logistic-growth-K${p.K}-r${p.r}.csv`)
 }

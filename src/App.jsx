@@ -19,6 +19,7 @@ import { playEventClip, useSoundsReady } from './sounds.js'
 import { useSound } from './useSound.js'
 import { useExtinction } from './useExtinction.js'
 import ErrorDialog from './ErrorDialog.jsx'
+import { downloadCrimeReport } from './crimeReport.js'
 import SoundLoader from './SoundLoader.jsx'
 import PlayerBar from './PlayerBar.jsx'
 import { useVisibleShare } from './useVisibleShare.js'
@@ -253,6 +254,7 @@ export default function App() {
         info={extinction}
         onClose={() => setExtinction(null)}
         onRestart={() => {
+          downloadCrimeReport({ p, events, extinction, peak: figures.peak })
           setExtinction(null)
           restart()
         }}
